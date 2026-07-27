@@ -1,0 +1,91 @@
+### ATS.... using langchain framework
+
+### step 1 - install all packages
+
+!pip install -q langchain langchain-google-genai langchain-community pypdf docx2txt langchain_core langchain-text-splitters langchain-classic
+
+### import libraries - step 2
+
+import os
+from google.colab import files, userdata
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader, TextLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain_classic.chains import LLMChain
+
+
+### API key setup
+
+
+os.environ["GOOGLE_API_KEY"] = userdata.get('GOOGLE_API_KEY')
+
+#### llm and parser setup
+
+llm = ChatGoogleGenerativeAI(model="gemini-flash-latest", temperature=0.3)
+output_parser = StrOutputParser()
+
+#### define prompt
+
+template = """
+You are an AI resume screener
+
+Job Description:
+{job_desc}
+
+resume text:
+{resume_text}
+
+Give a simple analysis with:
+- Fit Score (0-100)
+- Top 5 matching skills
+- Missing Important skills
+- One line verdict ( yes/no )
+"""
+
+prompt = PromptTemplate(template=template, input_variables=["job_desc", "resume_text"])
+
+### define chain
+
+chain = LLMChain(llm=llm, prompt=prompt, output_parser=output_parser)
+
+
+###### upload resume and extract text
+
+print("Please upload your resume(PDF/DOCX/TXT):")
+uploaded = files.upload()
+
+if not uploaded:
+  raise ValueError("No File Uploaded.")
+
+resume_path = list(uploaded.keys())[0]
+
+if resume_path.lower().endswith(".pdf"):
+  loader = PyPDFLoader(resume_path)
+elif resume_path.lower().endswith(".docx"):
+  loader = Docx2txtLoader(resume_path)
+else:
+  loader = TextLoader(resume_path, encoding="utf-8")
+
+docs= loader.load()
+
+### splitting technique
+
+splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+chunks = splitter.split_documents(docs)
+resume_text = "".join(c.page_content for c in chunks).strip()
+
+### fallback
+
+if not resume_text:
+  raise ValueError("No Text Extracted.")
+
+
+job_description = """We are hiring for a Lead AI engineer with experience in python, machine learning, deep learning, and Cloud(AWS/Azure/GCP)."""
+
+result = chain.run(job_desc=job_description, resume_text=resume_text)
+print(result)
+
+                          
+                      
