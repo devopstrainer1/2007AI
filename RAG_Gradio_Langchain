@@ -1,0 +1,84 @@
+from ast import mod
+##### RAG + Langchain ( HR assistant bot )
+
+### step 1 - install required libraries
+
+!pip install -q langchain pypdf gradio langchain-community
+!pip install -q google-generativeai langchain-google-genai chromadb
+!pip install -q sentence-transformers ## hugging face ebeddings
+
+### step 2: import libraries
+
+import os
+import gradio as gr ### UI Interface
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter ### chunkking
+from langchain_google_genai import ChatGoogleGenerativeAI ###LLM
+from langchain_community.embeddings import HuggingFaceEmbeddings ### embedding model
+from langchain_classic.chains import RetrievalQA ### RAG framework
+from langchain_community.vectorstores import Chroma ### vector database
+
+### step 3 : import gemini API key
+
+from google.colab import userdata
+os.environ["GOOGLE_API_KEY"] = userdata.get("GOOGLE_API_KEY")
+
+
+### STEP 4: load and split pdf
+
+pdf_path = "/content/hr_policy.pdf"
+loader = PyPDFLoader(pdf_path)
+pages = loader.load()
+
+text_splitter = RecursiveCharacterTextSplitter(
+    chunk_size=1000,
+    chunk_overlap=200
+)
+
+docs = text_splitter.split_documents(pages)
+
+
+### step 5 - create embedding & vector store
+
+embeddings = HuggingFaceEmbeddings(
+    model_name="sentence-transformers/all-MiniLM-L6-v2"
+)
+
+vectorstore = Chroma.from_documents(
+    docs,
+    embeddings,
+    collection_name="hr_policy"
+)
+
+### step 6 - create QA chain
+
+llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
+
+retriever = vectorstore.as_retriever()
+
+qa_chain = RetrievalQA.from_chain_type(
+    llm=llm,
+    chain_type="stuff", ### map_reduce, refine
+    retriever=retriever
+)
+
+#### step 7 - create gradio chatbot
+
+
+def chatbot(query):
+  try:
+    return qa_chain.run(query)
+  except Exception as e:
+    return "Error: {e}"
+
+demo = gr.Interface(
+    fn=chatbot,
+    inputs=gr.Textbox(label="Ask HR assistant some question", lines=3, placeholder="Enter your query here..."),
+    outputs=gr.Textbox(label="HR assistant's response", lines=12),
+    title="AI powered Hr assistant"
+)
+
+demo.launch(
+    share=True
+)
+
