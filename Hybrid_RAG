@@ -1,0 +1,171 @@
+from ast import mod
+##### RAG + Langchain ( HR assistant bot )
+
+### change prompt engineering - maximum effort
+
+## changing embedding model....
+
+### check your retrieval
+
+### hybrid RAG..
+
+### retrieval quality + prompt 
+
+### step 1 - install required libraries
+
+!pip install -q langchain pypdf gradio langchain-community
+!pip install -q google-generativeai langchain-google-genai chromadb
+!pip install -q sentence-transformers ## hugging face ebeddings
+!pip install -q rank_bm25
+
+### step 2: import libraries
+
+import os
+import requests ## http request to website & APIs
+import gradio as gr ### UI Interface
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter ### chunkking
+from langchain_google_genai import ChatGoogleGenerativeAI ###LLM
+from langchain_community.embeddings import HuggingFaceEmbeddings ### embedding model
+from langchain_classic.chains import RetrievalQA ### RAG framework
+from langchain_community.vectorstores import Chroma ### vector database
+from langchain_classic.prompts import PromptTemplate ### prompt template
+from langchain_community.retrievers import BM25Retriever ### BM25 sparse retrieval
+from langchain_classic.retrievers import EnsembleRetriever ### ensemble retrieval ( hybrid RAG)
+
+### step 3 : import gemini API key
+
+from google.colab import userdata
+os.environ["GOOGLE_API_KEY"] = userdata.get("GOOGLE_API_KEY")
+
+
+### STEP 4: load and split pdf ( uploadinf file manually)
+
+#pdf_path = "/content/hr_policy.pdf"
+#loader = PyPDFLoader(pdf_path)
+#pages = loader.load()
+
+
+### STEP 4: downloading file from internet
+
+pdf_url = "https://www.iima.ac.in/sites/default/files/2023-01/HR%20Policy%20Manual%202023%20%288%29.pdf"
+
+response = requests.get(pdf_url)
+with open("hr_policy.pdf", "wb") as f:
+  f.write(response.content)
+
+loader = PyPDFLoader("hr_policy.pdf")
+pages = loader.load()
+
+### chunking technique
+text_splitter = RecursiveCharacterTextSplitter(
+    chunk_size=800,
+    chunk_overlap=150
+)
+
+docs = text_splitter.split_documents(pages)
+
+
+### step 5 - create embedding & vector store
+
+### 384 dimensions
+
+embeddings = HuggingFaceEmbeddings(
+    model_name="sentence-transformers/all-MiniLM-L6-v2"
+)
+
+vectorstore = Chroma.from_documents(
+    docs,
+    embeddings,
+    collection_name="hr_policy"
+)
+
+### sparse retrieval
+
+bm25_retriever = BM25Retriever.from_documents(docs)
+bm25_retriever.k = 8
+
+### dense retrieval technique...
+dense_retriever = vectorstore.as_retriever(search_kwargs={"k": 8})
+
+### hybrid rag
+
+retriever = EnsembleRetriever(
+    retrievers=[bm25_retriever, dense_retriever],
+    weights=[0.4, 0.6]
+)
+
+
+
+
+### prompt template
+### task - make this better------
+prompt_template = """
+You are an intelligent HR Policy Assistant.
+
+Your role is to answer employee questions ONLY using the information provided in the context.
+
+Instructions:
+1. Carefully read the retrieved context before answering.
+2. Answer only from the provided context.
+3. Do NOT make up or assume information.
+4. If the answer is not present in the context, respond exactly with:
+   "I could not find this information in the HR policy."
+5. If multiple policies are relevant, combine them into a single clear answer.
+6. Keep the response concise, professional, and easy to understand.
+7. Use bullet points whenever appropriate.
+8. Mention policy conditions, eligibility, limits, or exceptions if they exist.
+9. Do not mention the context or retrieval process in your response.
+
+example:
+
+If user ask a question , how many leaves are allowed...
+
+Look at different leaves options defined ( casual, earned, sick...and others)...look at the number of days allowed for each...and than summarize your result while responding to user
+
+------------------------
+Context:
+{context}
+------------------------
+
+Employee Question:
+{question}
+
+Professional Answer:
+"""
+
+PROMPT = PromptTemplate(
+    template=prompt_template,
+    input_variables=["context", "question"]
+)
+
+### step 6 - create QA chain
+
+llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
+
+qa_chain = RetrievalQA.from_chain_type(
+    llm=llm,
+    chain_type_kwargs={"prompt": PROMPT},
+    chain_type="stuff", ### map_reduce, refine
+    retriever=retriever
+)
+
+#### step 7 - create gradio chatbot
+
+
+def chatbot(query):
+  try:
+    return qa_chain.run(query)
+  except Exception as e:
+    return "Error: {e}"
+
+demo = gr.Interface(
+    fn=chatbot,
+    inputs=gr.Textbox(label="Ask HR assistant some question", lines=3, placeholder="Enter your query here..."),
+    outputs=gr.Textbox(label="HR assistant's response", lines=12),
+    title="AI powered Hr assistant"
+)
+
+demo.launch(
+    share=True
+)
