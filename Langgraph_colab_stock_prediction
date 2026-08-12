@@ -1,0 +1,192 @@
+### stock market prediction tool using langchain, langgraph and groq
+
+### step 1 - install packages
+
+!pip install -q langgraph langchain langchain-groq yfinance
+
+### step 2 - Import libraries
+
+import os
+import sqlite3
+import yfinance as yf
+
+from langchain_groq import ChatGroq
+
+from langgraph.graph import StateGraph, END
+
+from typing import TypedDict
+
+
+#### API key
+
+os.environ["GROQ_API_KEY"] = "gsk_uR2GJxJv3HXL59Hv73EfVQg3HpBMq"
+
+#### LLM
+
+llm = ChatGroq(
+    model="llama-3.3-70b-versatile",
+    temperature=0
+)
+
+### sqllite memory
+
+
+db = sqlite3.connect("memory.db")
+
+db.execute("""
+CREATE TABLE IF NOT EXISTS trades (
+    ticker TEXT,
+    decision TEXT
+)
+""")
+
+
+#### state definition
+
+class StockState(TypedDict):
+    ticker: str
+    stock_data: str
+    memory: str
+    decision: str
+
+### fetch stock data
+
+def fetch_stock(state):
+    ticker = state["ticker"]
+    stock = yf.Ticker(ticker)
+    hist = stock.history(period="5d")
+    latest = hist["Close"].iloc[-1]
+    old = hist["Close"].iloc[0]
+
+    change = ((latest - old) / old ) * 100
+
+    return {
+        "stock_data":
+        f"""
+    Ticker: {ticker}
+    Current Price: ${latest:.2f}
+    5 day Change: {change:.2f}%
+    """
+    }
+
+
+#### search memory
+
+
+def load_memory(state):
+    ticker = state["ticker"]
+
+    rows = db.execute(
+        "SELECT decision from trades WHERE ticker =?",
+        (ticker,)
+    ).fetchall()
+
+    if rows:
+        memory = f"Previous Decision: {rows}"
+    else:
+        memory = "No Previous history"
+    return {
+        "memory": memory
+    }
+    
+
+#### AI trading decision
+
+def ai_trade_decision(state):
+
+    prompt = f"""
+    You are an AI trading bot.
+
+    {state['stock_data']}
+
+    {state['memory']}
+
+    Decide:
+    BUY, SELL or HOLD
+
+    Give short reason and current stock price and future price prediction(short team/long term) in local currency of the stock. Also explain factors affecting stock price movement
+    """
+
+    response = llm.invoke(prompt)
+
+    content = response.content
+
+    if "BUY" in content.upper():
+        decision = "BUY"
+    elif "SELL" in content.upper():
+        decision = "SELL"
+    else:
+        decision = "HOLD"
+
+    return {
+        "decision": f"{decision}\n\n{content}"
+    }
+
+
+### load memory
+
+def save_memory(state):
+
+    db.execute(
+        "INSERT INTO trades VALUES (?, ?)",
+        (state["ticker"], 
+         state["decision"])
+    )
+
+    db.commit()
+
+    return {}
+    
+
+### Building Langgraph --- nodes & edges
+
+graph = StateGraph(StockState)
+
+graph.add_node("fetch_stock", fetch_stock)
+graph.add_node("load_memory", load_memory)
+graph.add_node("ai_decision", ai_trade_decision)
+graph.add_node("save_memory", save_memory)
+
+graph.set_entry_point("fetch_stock")
+
+
+### upstream downstream
+graph.add_edge(
+    "fetch_stock",
+    "load_memory"
+)
+
+graph.add_edge(
+    "load_memory",
+    "ai_decision"
+)
+
+graph.add_edge(
+    "ai_decision",
+    "save_memory"
+)
+
+graph.add_edge(
+    "save_memory",
+    END
+)
+
+app = graph.compile()
+
+
+#### execute the code
+
+
+ticker = input("Enter ticker: ").upper()
+
+result = app.invoke({
+    "ticker": ticker
+})
+
+
+print("\n==========================")
+print("AI Trading Decision")
+print("==========================")
+print(result["decision"])
+
+
